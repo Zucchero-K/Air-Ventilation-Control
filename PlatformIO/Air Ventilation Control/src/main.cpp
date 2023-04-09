@@ -18,7 +18,7 @@
 #include "ThingSpeak.h"
 #include "secrets.h"
 
-#define DEBUG 1  // comment out this line to remove debug messages from the code
+#define DEBUG 1  // Comment out this line to remove debug messages from the compiled code
 
 #ifdef DEBUG
 // Debug messages included
@@ -95,7 +95,13 @@ WiFiClient client;
 /**************************
    IR control values
 
-   Hexa decimal values of buttons from an NEC encoded RGB-light remote
+   
+   The IRremoteESP8266 library supports many type of IR remotes.
+   To check the encoding and hexa decimal values associated with the buttons you can
+   run one of the IRrecvDump.ino example sketches included in the library and try
+   pressing some buttons to see the output values.
+
+   This sketch uses hexa decimal values from a relatively standard and cheap NEC encoded RGB-light remote.
  ************************/
 const uint64_t IR_UP = 0xF700FF;
 const uint64_t IR_DOWN = 0xF7807F;
@@ -145,16 +151,17 @@ const uint64_t PINNUMBERS[10] =
  ************************/
 void initWifi();
 void disableWifi();
+void selectMenuWifi();
+void changeLimits();
+float getData();
 void ledOn();
 void ledOff();
 void toggleLed();
-void getData();
-void changeEnvControl();
-void changeLimits();
-void relayOff();
 void relayOn();
-void closeAV();
+void relayOff();
 void openAV();
+void closeAV();
+
 
 /**************************
    Globals
@@ -168,9 +175,9 @@ const int GETDATA_INTERVAL_SEC = 15;  // S
 unsigned long relayTime = 0;
 
 // boolean flags
-bool Blink = false;
+bool blink = false;
 bool envControl = false;
-bool Wifienabled = false;
+bool wifiEnabled = false;
 
 // pin states
 uint8_t ledState = LOW;  // Note: The built-in led will light up when LOW and dim when HIGH
@@ -202,7 +209,7 @@ void setup() {
   // ESP.eraseConfig();
   WiFi.softAPdisconnect(true);  // Switch off software enabled accesspoint
   // WiFi.persistent(false);
-  WiFi.mode(WIFI_STA);
+  WiFi.mode(WIFI_STA);  // Set the device as station, to connect to an access point
   WiFi.disconnect();
   delay(100);
 
@@ -214,7 +221,7 @@ void setup() {
 }
 
 void loop() {
-  if (Wifienabled && !WiFi.isConnected()) {
+  if (wifiEnabled && !WiFi.isConnected()) {
     WiFi.reconnect();
   }
 
@@ -224,53 +231,64 @@ void loop() {
       // debugln(results.value);
       switch (results.value) {
         case IR_ON:
-          initWifi();
+          // envControl value can be used in main loop for enabling automatic control
+          envControl = true;
+          debugln("ON");
           break;
         case IR_OFF:
-          disableWifi();
+          // envControl value can be used in main loop for disabling automatic control
+          envControl = false;
+          debugln("OFF");
           break;
         case IR_GREEN:
-          openAV();
+          openAV();             // Open the ventilation
           break;
         case IR_RED:
-          closeAV();
+          closeAV();            // Close the ventilation
           break;
-        case IR_UP:
+        case IR_UP:             // Raise the ventilation angle by 5 degrees
           relayOn();
           angleCurrent += 5;
           angleCurrent = constrain(angleCurrent, angleClosed, angleOpen);
           s.write(angleCurrent);
           relayTime = millis();
           break;
-        case IR_DOWN:
+        case IR_DOWN:           // Lower the ventilation angle by 5 degrees
           relayOn();
           angleCurrent -= 5;
           angleCurrent = constrain(angleCurrent, angleClosed, angleOpen);
           s.write(angleCurrent);
           relayTime = millis();
           break;
-        case IR_WHITE:
-          // not implemented yet
-          changeEnvControl();
+        case IR_WHITE:          // Go to the WiFi selection menu to turn it on or off
+          selectMenuWifi();
           break;
-        case IR_BLUE:
+        case IR_BLUE:           // Go to the agle limit adjustment menu
           changeLimits();
           break;
         default:
           break;
       }
     } else {
-      debugln("Unknown.");
+      debugln("Unknown.");  // IR-enconding other than NEC
     }
     irrecv.resume();  // Receive the next value
   }
+
+
+  /*  Not developed yet
+  if (envControl && wifiEnabled){
+    // Implement your own sensor feedback control routine here
+  }
+  */
+
 
   if (relayState && millis() - relayTime > 3000) {  // Turn the relay off when the servo is not in use
     relayOff();
   }
 
-  // If an error occurs, Blink will be set to "true" and this statement will make the onboard LED blink
-  if (Blink && millis() - ledLastMillis > LED_BLINK_INTERVAL_MS) {
+  // If an error occurs, blink will be set to "true" and this statement will make the onboard LED blink
+  if (blink && millis() - ledLastMillis > LED_BLINK_INTERVAL_MS) {
     toggleLed();
     ledLastMillis = millis();
   }
@@ -278,7 +296,7 @@ void loop() {
 
 void initWifi() {
   irrecv.resume();
-  if (Wifienabled) {
+  if (wifiEnabled) {
     debugln("skip initwifi.");
     return;
   }
@@ -297,7 +315,7 @@ void initWifi() {
   debugln(WIFI_SSID);
 
   if (WIFI_PWD == "") {
-    Blink = true;
+    blink = true;
     debugln("No password!");
   } else {
     WiFi.begin(WIFI_SSID, WIFI_PWD);
@@ -307,23 +325,23 @@ void initWifi() {
       toggleLed();
       debug(".");
       if (WiFi.status() == WL_WRONG_PASSWORD) {
-        Blink = true;
-        Wifienabled = false;
+        blink = true;
+        wifiEnabled = false;
         debugln("Wrong password.");
         break;
       }
       if (millis() - connectingTime > 10000) {
         disableWifi();
-        Blink = true;
-        Wifienabled = false;
+        blink = true;
+        wifiEnabled = false;
         debugln("Connecting timeout.");
         break;
       }
       yield();
     }
     if (WiFi.status() == WL_CONNECTED) {
-      Blink = false;
-      Wifienabled = true;
+      blink = false;
+      wifiEnabled = true;
       debugln("Connected.");
     }
   }
@@ -331,14 +349,41 @@ void initWifi() {
 
 void disableWifi() {
   irrecv.resume();
-  Blink = false;
+  blink = false;
   ledOff();
   // adc_power_release();
   WiFi.disconnect();
   delay(500);
   // WiFi.mode(WIFI_OFF);  // Switch WiFi off
   debugln("Wifi disabled");
-  Wifienabled = false;
+  wifiEnabled = false;
+}
+
+void selectMenuWifi() {
+  irrecv.resume();
+  ledOn();
+  bool scanLoop = true;
+  while (scanLoop) {
+    if (irrecv.decode(&results)) {
+      if (results.decode_type != NEC) {
+        goto end;
+      }
+      if (results.value == IR_ON) {
+        initWifi();
+        scanLoop = false;
+        goto end;
+      }
+      if (results.value == IR_OFF) {
+        disableWifi();
+        scanLoop = false;
+        goto end;
+      }
+    end:
+      irrecv.resume();
+    }
+    yield();  // Feed the WDT
+  }
+  ledOff();
 }
 
 // This function allows the user to set treshold angles, which the servo is not able to move beyond afterwards
@@ -350,7 +395,7 @@ void changeLimits() {
   bool adjustApproved = false;
   bool scanLoop = true;
   unsigned long loopTime = millis();
-  while (scanLoop) {  // bail out loop to avoid accidental limit adjustment activations
+  while (scanLoop) {  // Bail out loop to avoid accidental limit adjustment activations
     if (irrecv.decode(&results)) {
       if (results.decode_type != NEC) {
         goto end1;
@@ -378,7 +423,7 @@ void changeLimits() {
   if (adjustApproved) {  // Proceed when user intends to adjust the lever limits
     relayOn();
     angleCurrent = 90;
-    s.write(angleCurrent);  // move the servo to the middle position to indicate that it is ready for adjustment
+    s.write(angleCurrent);  // Move the servo to the middle position to indicate that it is ready for adjustment
     scanLoop = true;
     while (scanLoop) {
       if (irrecv.decode(&results)) {
@@ -388,17 +433,17 @@ void changeLimits() {
         switch (results.value) {
           case IR_UP:  // User confirms position and angle will be saved as max open angle
             angleOpen = angleCurrent;
-            EEPROM.write(1, angleOpen);  // save value to non volatile memory
+            EEPROM.write(1, angleOpen);  // Save value to non volatile memory
             if (!EEPROM.commit()) {
-              Blink = true;
+              blink = true;
             }
             scanLoop = false;
             break;
           case IR_DOWN:  // User confirms position and angle will be saved as min open angle
             angleClosed = angleCurrent;
-            EEPROM.write(0, angleClosed);  // save value to non volatile memory
+            EEPROM.write(0, angleClosed);  // Save value to non volatile memory
             if (!EEPROM.commit()) {
-              Blink = true;
+              blink = true;
             }
             scanLoop = false;
             break;
@@ -438,58 +483,27 @@ void changeLimits() {
   ledOff();
 }
 
-// Set a flag "envControl" for the main loop to tell if
-// automatic climate control should be enabled or disabled
-// Note: The automatic control loop is not implemented yet
-void changeEnvControl() {
-  irrecv.resume();
-  ledOn();
-  bool scanLoop = true;
-  while (scanLoop) {
-    if (irrecv.decode(&results)) {
-      if (results.decode_type != NEC) {
-        goto end;
-      }
-      if (results.value == IR_ON) {
-        envControl = true;
-        scanLoop = false;
-        debugln("ON");
-        goto end;
-      }
-      if (results.value == IR_OFF) {
-        envControl = false;
-        scanLoop = false;
-        debugln("OFF");
-        goto end;
-      }
-    end:
-      irrecv.resume();
-    }
-    yield();  // Feed the WDT
-  }
-  ledOff();
-}
-
 // this is an unused test function, but contains methods to getting data and timestamps from uploaded sensor data at a thingspeak channel for control feedback
 // you could also directly communicate with a microcontroller that collects sensor readings to be independent of an internet connection and external server
-void getData() {
+float getData() {
   irrecv.resume();
   if (!WiFi.isConnected()) {
     debugln("Enable Wifi first!");
-    return;
+    return NAN;
   }
-  if (millis() - dataLastMillis < GETDATA_INTERVAL_SEC * 1000L) {  // avoid spamming the server
+  if (millis() - dataLastMillis < GETDATA_INTERVAL_SEC * 1000L) {  // Avoid spamming the server
     debug("Please wait ");
     debug(GETDATA_INTERVAL_SEC - (millis() - dataLastMillis) / 1000);
     debugln(" s.");
-    return;
+    return NAN;
   }
   float Temp = ThingSpeak.readFloatField(CHANNEL_ID, SENSOR_FIELD, READ_API_KEY);  // Get the most recent sensor measurement from your channel
-  int stat = ThingSpeak.getLastReadStatus();                                       // get the status to see if the download was successful
+  int stat = ThingSpeak.getLastReadStatus();                                       // Get the status to see if the download was successful
   if (stat != 200) {                                                               // 200 means success
     debugln("Could not read thingspeak.");
     debug("statuscode: ");
     debugln(stat);
+    return NAN;
   } else {
     debugln(Temp);
     // Get the timestamp from when the data point was uploaded to the server.
@@ -497,6 +511,8 @@ void getData() {
     debugln(ThingSpeak.readCreatedAt(CHANNEL_ID, READ_API_KEY));
   }
   dataLastMillis = millis();
+
+  return Temp;
 }
 
 void ledOn() {

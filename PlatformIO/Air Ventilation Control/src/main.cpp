@@ -534,6 +534,9 @@ void toggleLed() {
 
 void relayOn() {
   // irrecv.resume();
+  if (!relayState){
+    delay(100); // some module power-up time if relay was previously off
+  }
   relayState = HIGH;
   digitalWrite(relayPin, relayState);
   relayTime = millis();
@@ -549,7 +552,6 @@ void openAV() {
   irrecv.resume();
   angleCurrent = angleOpen;
   relayOn();
-  delay(100);
   s.write(angleCurrent);
 }
 
@@ -557,6 +559,5 @@ void closeAV() {
   irrecv.resume();
   angleCurrent = angleClosed;
   relayOn();
-  delay(100);
   s.write(angleCurrent);
 }
